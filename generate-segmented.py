@@ -4,6 +4,9 @@ import csv, collections, os, json, yt_dlp
 from itertools import islice
 Segment = collections.namedtuple("Segment", ["i", "name", "url", "time", "split_time", "player", "date", "notes", "start", "end"])
 
+# preset should be "veryfast" during testing, then set to "slow" when done testing to render in higher quality
+ffmpeg_preset = "slow"
+
 def main():
     os.makedirs("cache", exist_ok=True)
     os.chdir("cache")
@@ -79,7 +82,17 @@ def render_full_speedrun(segments: list[Segment], changed_segments: list[tuple[S
     file_list = '\n'.join([f"file 'trimmed_{i}.mp4'" for i in range(len(segments))])
     with open("filelist.txt", "w") as f:
         f.write(file_list)
-    os.system("ffmpeg -f concat -i filelist.txt -c copy -fflags +genpts -y ../output.mp4")
+    # maybe?
+    # -fflags +genpts -fflags +igndts
+    os.system("ffmpeg -f concat -i filelist.txt -c copy -y notimer.mp4")
+    ffmpeg_overlay_cmd = f'ffmpeg \
+        -i notimer.mp4 \
+        -i ../timer.mov \
+        -filter_complex "[1:v]format=rgba[overlay];[0:v][overlay]overlay=0:0" \
+        -preset {ffmpeg_preset} \
+        -y \
+        ../output.mp4'
+    os.system(ffmpeg_overlay_cmd)
 
 
 # returns segments where url, start or end changed
@@ -102,7 +115,7 @@ def generate_description(segments: list[Segment], changed_segments: list[tuple[S
             s = "s"
         else:
             s = ""
-        updated = [f"{float(y.time)-float(x.time)} ({x.time} → {y.time}) at {x.name.replace('->', '→')}" for x, y in changed_segments]
+        updated = [f"{round(float(y.time)-float(x.time), 2)} ({x.time} → {y.time}) at {x.name.replace('->', '→')}" for x, y in changed_segments]
         desc += "\n".join([f"Updated segment{s}:"] + updated + ["\n"])
     else:
         desc += ""
@@ -134,9 +147,13 @@ def find_filename(i: int) -> str:
 # -map_metadata -1 removes all metadata from files. idk if it helps
 # -video_track_timescale 18000
 # -fflags +genpts
-# The last two are failed attempts to solve the following warning I keep getting, idk how to fix it:
+# -fflags +igndts
+# The last three are failed attempts to solve the following warning I keep getting, idk how to fix it:
 # [mov,mp4,m4a,3gp,3g2,mj2 @ 0x7fdafc01b2c0] Auto-inserting h264_mp4toannexb bitstream filterA
 # [mp4 @ 0x55ba7662aa40] Non-monotonous DTS in output stream 0:1; previous: 77846, current: 77836; changing to 77847. This may result in incorrect timestamps in the output file.
+# https://stackoverflow.com/questions/55914754/how-to-fix-non-monotonous-dts-in-output-stream-01-when-using-ffmpeg
+# 
+# This probably warned about the mismatched timecodes in the concatenated file. mpv will show the timecode skipping way more than 1 frame on cuts, and uploading the video to youtube will make it fill in the blanks with a bunch of duplicated frames. Fortunately, overlaying a timer with ffmpeg fixes this.
 def render_segments(segments):
     for s in segments:
         fn = find_filename(s.i)
@@ -146,7 +163,7 @@ def render_segments(segments):
         ffmpeg_cmd += f'-i "{fn}" \
 -s 1920x1080 \
 -r 60 \
--preset slow \
+-preset {ffmpeg_preset} \
 -c:v libx264 \
 -crf 17 \
 -pix_fmt yuv420p \
@@ -154,9 +171,11 @@ def render_segments(segments):
 -c:a aac \
 -ar 44100 \
 -map_metadata -1 \
--fflags +genpts \
 "trimmed_{s.i}.mp4"'
         os.system(ffmpeg_cmd)
+
+# -fflags +igndts \
+# -fflags +genpts \
 
 if __name__ == "__main__":
     main()
